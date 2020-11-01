@@ -165,7 +165,12 @@ decl_event!(
         /// Some assets were transferred. \[asset_id, from, to, amount\]
         Transfer(AccountId, AccountId, MissionTokenId, MissionTokenBalance),
         /// A balance was set by root. \[who, free, reserved\]
-        MissionTokenBalanceSet(AccountId, MissionTokenId, MissionTokenBalance, MissionTokenBalance),
+        MissionTokenBalanceSet(
+            AccountId,
+            MissionTokenId,
+            MissionTokenBalance,
+            MissionTokenBalance,
+        ),
         /// Some amount was deposited (e.g. for transaction fees). \[who, deposit\]
         Deposit(AccountId, MissionTokenId, MissionTokenBalance),
         /// Some balance was reserved (moved from free to reserved). \[who, value\]
@@ -260,11 +265,10 @@ impl<T: Trait> Module<T> {
         };
 
         Self::mutate(&(token_id, target.clone()), |account_data| {
-            account_data.free = account_data.free
+            account_data.free = account_data
+                .free
                 .checked_add(&allowed_value)
-                .unwrap_or_else(|| {
-                    T::MaxMissionTokensSupply::get().saturated_into()
-                })
+                .unwrap_or_else(|| T::MaxMissionTokensSupply::get().saturated_into())
         });
     }
 
@@ -821,9 +825,7 @@ pub struct AccountInfo<Index, AccountData> {
 // Implement StoredMap for a simple single-item, kill-account-on-remove system. This works fine for
 // storing a single item which is required to not be empty/default for the account to exist.
 // Anything more complex will need more sophisticated logic.
-impl<T: Trait> StoredMap<(T::MissionTokenId, T::AccountId), AccountData<T::Balance>>
-    for Module<T>
-{
+impl<T: Trait> StoredMap<(T::MissionTokenId, T::AccountId), AccountData<T::Balance>> for Module<T> {
     fn get(k: &(T::MissionTokenId, T::AccountId)) -> AccountData<T::Balance> {
         SystemAccount::<T>::get(k).data
     }

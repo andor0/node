@@ -286,7 +286,12 @@ decl_event!(
         /// We have ended a spend period and will now allocate funds. \[budget_remaining\]
         Spending(MissionTokenId, MissionTokenBalance),
         /// Some funds have been allocated. \[proposal_index, award, beneficiary\]
-        Awarded(ProposalIndex, MissionTokenId, MissionTokenBalance, AccountId),
+        Awarded(
+            ProposalIndex,
+            MissionTokenId,
+            MissionTokenBalance,
+            AccountId,
+        ),
         /// A proposal was rejected; funds were slashed. \[proposal_index, slashed\]
         Rejected(ProposalIndex, MissionTokenId, MissionTokenBalance),
         /// Some of our funds have been burnt. \[burn\]
