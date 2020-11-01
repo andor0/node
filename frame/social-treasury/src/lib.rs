@@ -278,42 +278,42 @@ decl_event!(
     where
         AccountId = <T as frame_system::Trait>::AccountId,
         Hash = <T as frame_system::Trait>::Hash,
-        Balance = <T as pallet_mission_tokens::Trait>::Balance,
-        TokenId = <T as pallet_mission_tokens::Trait>::MissionTokenId,
+        MissionTokenBalance = <T as pallet_mission_tokens::Trait>::Balance,
+        MissionTokenId = <T as pallet_mission_tokens::Trait>::MissionTokenId,
     {
         /// New proposal. \[proposal_index\]
         Proposed(ProposalIndex),
         /// We have ended a spend period and will now allocate funds. \[budget_remaining\]
-        Spending(TokenId, Balance),
+        Spending(MissionTokenId, MissionTokenBalance),
         /// Some funds have been allocated. \[proposal_index, award, beneficiary\]
-        Awarded(ProposalIndex, TokenId, Balance, AccountId),
+        Awarded(ProposalIndex, MissionTokenId, MissionTokenBalance, AccountId),
         /// A proposal was rejected; funds were slashed. \[proposal_index, slashed\]
-        Rejected(ProposalIndex, TokenId, Balance),
+        Rejected(ProposalIndex, MissionTokenId, MissionTokenBalance),
         /// Some of our funds have been burnt. \[burn\]
-        Burnt(TokenId, Balance),
+        Burnt(MissionTokenId, MissionTokenBalance),
         /// Spending has finished; this is the amount that rolls over until next spend.
         /// \[budget_remaining\]
-        Rollover(TokenId, Balance),
+        Rollover(MissionTokenId, MissionTokenBalance),
         /// Some funds have been deposited. \[deposit\]
-        Deposit(TokenId, Balance),
+        Deposit(MissionTokenId, MissionTokenBalance),
         /// A new tip suggestion has been opened. \[tip_hash\]
         NewTip(Hash),
         /// A tip suggestion has reached threshold and is closing. \[tip_hash\]
         TipClosing(Hash),
         /// A tip suggestion has been closed. \[tip_hash, who, payout\]
-        TipClosed(Hash, AccountId, TokenId, Balance),
+        TipClosed(Hash, AccountId, MissionTokenId, MissionTokenBalance),
         /// A tip suggestion has been retracted. \[tip_hash\]
         TipRetracted(Hash),
         /// New bounty proposal. [index]
         BountyProposed(BountyIndex),
         /// A bounty proposal was rejected; funds were slashed. [index, bond]
-        BountyRejected(BountyIndex, TokenId, Balance),
+        BountyRejected(BountyIndex, MissionTokenId, MissionTokenBalance),
         /// A bounty proposal is funded and became active. [index]
         BountyBecameActive(BountyIndex),
         /// A bounty is awarded to a beneficiary. [index, beneficiary]
         BountyAwarded(BountyIndex, AccountId),
         /// A bounty is claimed by beneficiary. [index, payout, beneficiary]
-        BountyClaimed(BountyIndex, TokenId, Balance, AccountId),
+        BountyClaimed(BountyIndex, MissionTokenId, MissionTokenBalance, AccountId),
         /// A bounty is cancelled. [index]
         BountyCanceled(BountyIndex),
         /// A bounty expiry is extended. [index]
@@ -1034,10 +1034,11 @@ decl_module! {
                     if era < current_era {
                         let reward_points = <pallet_staking::Module<T>>::eras_reward_points(era);
                         let treasury_account_id = Self::account_id();
+                        let (min_token_id, max_token_id) = <pallet_mission_tokens::Module<T>>::mission_token_ids();
 
                         for (account_id, points) in reward_points.individual {
                             let mission_token_id = <pallet_validator_registry::Module<T>>::mission_of(account_id);
-                            if mission_token_id > 0.into() {
+                            if mission_token_id >= min_token_id && mission_token_id <= max_token_id {
                                 <pallet_mission_tokens::Module<T>>::mint(
                                     treasury_account_id.clone(),
                                     mission_token_id,

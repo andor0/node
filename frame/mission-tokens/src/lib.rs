@@ -1,7 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use self::imbalances::{NegativeImbalance, PositiveImbalance};
-use codec::{Decode, Encode, FullCodec};
+use codec::{Decode, Encode};
 use frame_support::{
     decl_error, decl_event, decl_module, decl_storage,
     dispatch::DispatchResult,
@@ -31,22 +31,18 @@ mod tests;
 
 pub trait Trait: frame_system::Trait {
     type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
+
     /// The balance of an account.
     type Balance: Member + Parameter + AtLeast32BitUnsigned + Default + Copy;
 
     type MissionTokenId: Parameter + AtLeast32BitUnsigned + Default + Copy;
+
     /// The minimum amount required to keep an account open.
     type ExistentialDeposit: Get<Self::Balance>;
-    /// The means of storing the balances of an account.
-    type AccountStore: StoredMap<
-        (Self::MissionTokenId, Self::AccountId),
-        AccountData<Self::Balance>,
-    >;
-    /// Data to be associated with an account (other than nonce/transaction counter, which this
-    /// module does regardless).
-    type AccountData: Member + FullCodec + Clone + Default;
+
     /// Handler for when a new account has just been created.
     type OnNewAccount: OnNewAccount<(Self::MissionTokenId, Self::AccountId)>;
+
     type MaxMissionTokensSupply: Get<u128>;
 }
 
@@ -147,14 +143,9 @@ decl_storage! {
 
         pub TotalIssuance: map hasher(blake2_128_concat) T::MissionTokenId => T::Balance;
 
-        /// The balance of an account.
-        ///
-        /// NOTE: This is only used in the case that this module is used to store balances.
-        pub Account: map hasher(blake2_128_concat) (T::MissionTokenId, T::AccountId) => AccountData<T::Balance>;
-
         /// The full account information for a particular account ID.
         pub SystemAccount get(fn system_account):
-            map hasher(blake2_128_concat) (T::MissionTokenId, T::AccountId) => AccountInfo<T::Index, <T as Trait>::AccountData>;
+            map hasher(blake2_128_concat) (T::MissionTokenId, T::AccountId) => AccountInfo<T::Index, AccountData<T::Balance>>;
 
         /// Any liquidity locks on some account balances.
         /// NOTE: Should only be accessed when setting, changing and freeing a lock.
@@ -166,21 +157,21 @@ decl_event!(
     pub enum Event<T>
     where
         AccountId = <T as frame_system::Trait>::AccountId,
-        Balance = <T as Trait>::Balance,
         MissionTokenId = <T as Trait>::MissionTokenId,
+        MissionTokenBalance = <T as Trait>::Balance,
     {
         /// An account was created with some free balance. \[account, free_balance\]
-        Endowed(AccountId, MissionTokenId, Balance),
+        Endowed(AccountId, MissionTokenId, MissionTokenBalance),
         /// Some assets were transferred. \[asset_id, from, to, amount\]
-        Transfer(AccountId, MissionTokenId, AccountId, Balance),
+        Transfer(AccountId, AccountId, MissionTokenId, MissionTokenBalance),
         /// A balance was set by root. \[who, free, reserved\]
-        BalanceSet(AccountId, MissionTokenId, Balance, Balance),
+        MissionTokenBalanceSet(AccountId, MissionTokenId, MissionTokenBalance, MissionTokenBalance),
         /// Some amount was deposited (e.g. for transaction fees). \[who, deposit\]
-        Deposit(AccountId, MissionTokenId, Balance),
+        Deposit(AccountId, MissionTokenId, MissionTokenBalance),
         /// Some balance was reserved (moved from free to reserved). \[who, value\]
-        Reserved(AccountId, MissionTokenId, Balance),
+        Reserved(AccountId, MissionTokenId, MissionTokenBalance),
         /// Some balance was unreserved (moved from reserved to free). \[who, value\]
-        Unreserved(AccountId, MissionTokenId, Balance),
+        Unreserved(AccountId, MissionTokenId, MissionTokenBalance),
         /// A new \[account\] was created.
         NewAccount(AccountId, MissionTokenId),
     }
@@ -256,7 +247,10 @@ impl<T: Trait> Module<T> {
     }
 
     pub fn mint(target: T::AccountId, token_id: T::MissionTokenId, value: T::Balance) {
-        // TODO: add check: only treasury account can call this function
+        // TODO: add check: calls allowed only for treasure account
+        if value.is_zero() {
+            return;
+        }
         let current_balance = Self::free_balance(&target, token_id);
         let total_supply = T::MaxMissionTokensSupply::get().saturated_into();
         let allowed_value = if current_balance + value > total_supply {
@@ -264,13 +258,13 @@ impl<T: Trait> Module<T> {
         } else {
             value
         };
-        let _ = Self::try_mutate_account(&target, token_id, |account, _| -> DispatchResult {
-            account.free = account
-                .free
-                .checked_add(&allowed_value)
-                .ok_or(Error::<T>::Overflow)?;
 
-            Ok(())
+        Self::mutate(&(token_id, target.clone()), |account_data| {
+            account_data.free = account_data.free
+                .checked_add(&allowed_value)
+                .unwrap_or_else(|| {
+                    T::MaxMissionTokensSupply::get().saturated_into()
+                })
         });
     }
 
@@ -339,8 +333,8 @@ impl<T: Trait> Module<T> {
         // Emit transfer event.
         Self::deposit_event(RawEvent::Transfer(
             transactor.clone(),
-            token_id,
             dest.clone(),
+            token_id,
             value,
         ));
 
@@ -575,7 +569,7 @@ impl<T: Trait> Module<T> {
         token_id: T::MissionTokenId,
         f: impl FnOnce(&mut AccountData<T::Balance>, bool) -> Result<R, E>,
     ) -> Result<R, E> {
-        T::AccountStore::try_mutate_exists(&(token_id, who.clone()), |maybe_account| {
+        Self::try_mutate_exists(&(token_id, who.clone()), |maybe_account| {
             let is_new = maybe_account.is_none();
             let mut account = maybe_account.take().unwrap_or_default();
             f(&mut account, is_new).map(move |result| {
@@ -662,7 +656,7 @@ impl<T: Trait> Module<T> {
 
     /// Get both the free and reserved balances of an account.
     fn account(token_id: T::MissionTokenId, who: &T::AccountId) -> AccountData<T::Balance> {
-        T::AccountStore::get(&(token_id, who.clone()))
+        Self::get(&(token_id, who.clone()))
     }
 
     pub fn minimum_balance() -> T::Balance {
@@ -827,16 +821,16 @@ pub struct AccountInfo<Index, AccountData> {
 // Implement StoredMap for a simple single-item, kill-account-on-remove system. This works fine for
 // storing a single item which is required to not be empty/default for the account to exist.
 // Anything more complex will need more sophisticated logic.
-impl<T: Trait> StoredMap<(T::MissionTokenId, T::AccountId), <T as Trait>::AccountData>
+impl<T: Trait> StoredMap<(T::MissionTokenId, T::AccountId), AccountData<T::Balance>>
     for Module<T>
 {
-    fn get(k: &(T::MissionTokenId, T::AccountId)) -> <T as Trait>::AccountData {
+    fn get(k: &(T::MissionTokenId, T::AccountId)) -> AccountData<T::Balance> {
         SystemAccount::<T>::get(k).data
     }
     fn is_explicit(k: &(T::MissionTokenId, T::AccountId)) -> bool {
         SystemAccount::<T>::contains_key(k)
     }
-    fn insert(k: &(T::MissionTokenId, T::AccountId), data: <T as Trait>::AccountData) {
+    fn insert(k: &(T::MissionTokenId, T::AccountId), data: AccountData<T::Balance>) {
         let existed = SystemAccount::<T>::contains_key(k);
         SystemAccount::<T>::mutate(k, |a| a.data = data);
         if !existed {
@@ -849,7 +843,7 @@ impl<T: Trait> StoredMap<(T::MissionTokenId, T::AccountId), <T as Trait>::Accoun
     }
     fn mutate<R>(
         k: &(T::MissionTokenId, T::AccountId),
-        f: impl FnOnce(&mut <T as Trait>::AccountData) -> R,
+        f: impl FnOnce(&mut AccountData<T::Balance>) -> R,
     ) -> R {
         let existed = SystemAccount::<T>::contains_key(k);
         let r = SystemAccount::<T>::mutate(k, |a| f(&mut a.data));
@@ -860,14 +854,14 @@ impl<T: Trait> StoredMap<(T::MissionTokenId, T::AccountId), <T as Trait>::Accoun
     }
     fn mutate_exists<R>(
         k: &(T::MissionTokenId, T::AccountId),
-        f: impl FnOnce(&mut Option<<T as Trait>::AccountData>) -> R,
+        f: impl FnOnce(&mut Option<AccountData<T::Balance>>) -> R,
     ) -> R {
         Self::try_mutate_exists(k, |x| -> Result<R, Infallible> { Ok(f(x)) })
             .expect("Infallible; qed")
     }
     fn try_mutate_exists<R, E>(
         k: &(T::MissionTokenId, T::AccountId),
-        f: impl FnOnce(&mut Option<<T as Trait>::AccountData>) -> Result<R, E>,
+        f: impl FnOnce(&mut Option<AccountData<T::Balance>>) -> Result<R, E>,
     ) -> Result<R, E> {
         SystemAccount::<T>::try_mutate_exists(k, |maybe_value| {
             let existed = maybe_value.is_some();
